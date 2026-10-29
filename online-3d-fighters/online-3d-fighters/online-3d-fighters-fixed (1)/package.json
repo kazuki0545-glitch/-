@@ -1,0 +1,9 @@
+{
+  "name": "online-3d-fighters",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Two-player online pseudo-3D arena fighter with invite URLs",
+  "scripts": {"start": "node server.js"},
+  "engines": {"node": ">=18"},
+  "dependencies": {"express": "^4.21.2", "socket.io": "^4.8.1"}
+}

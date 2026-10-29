@@ -1,0 +1,49 @@
+'use strict';
+(()=>{
+const $=id=>document.getElementById(id), canvas=$('game'),ctx=canvas.getContext('2d');
+const socket=io(), qs=new URLSearchParams(location.search), incoming=(qs.get('room')||'').toUpperCase();
+let slot=null,room=null,snap=null,running=false, lastInput='',events=[],sparks=[],shaker=0,t=0,autojoined=false;
+const keys={};const copy={left:false,right:false,jump:false,punch:false,kick:false,guard:false};
+// Both players use the same keyboard on their own computer.
+const controlMaps=[{left:'a',right:'d',jump:'w',punch:'f',kick:'g',guard:'h'},{left:'a',right:'d',jump:'w',punch:'f',kick:'g',guard:'h'}];
+const recognized=new Set(['a','d','w','f','g','h','ArrowLeft','ArrowRight','ArrowUp','j','k','l']);
+const keyAliases={ArrowLeft:'a',ArrowRight:'d',ArrowUp:'w',j:'f',k:'g',l:'h'};
+window.addEventListener('keydown',e=>{const k=e.key.length===1?e.key.toLowerCase():e.key;if(!recognized.has(k)||e.target.tagName==='INPUT')return;e.preventDefault();keys[keyAliases[k]||k]=true;sendInput();});
+window.addEventListener('keyup',e=>{const k=e.key.length===1?e.key.toLowerCase():e.key;if(recognized.has(k)){e.preventDefault();keys[keyAliases[k]||k]=false;sendInput();}});
+window.addEventListener('blur',()=>{for(const k of recognized)keys[keyAliases[k]||k]=false;sendInput();});
+function sendInput(){if(slot===null)return;const map=controlMaps[slot],input={};for(const k of Object.keys(copy))input[k]=!!keys[map[k]];const str=JSON.stringify(input);if(lastInput!==str){lastInput=str;socket.emit('input',input);}}
+setInterval(()=>{if(slot!==null)socket.emit('input',Object.fromEntries(Object.keys(copy).map(k=>[k,!!keys[controlMaps[slot][k]]])));},70);
+function enter(id,index){room=id;slot=index;lastInput='';$('linkbox').style.display='block';$('invite').value=location.origin+'/?room='+encodeURIComponent(id);history.replaceState(null,'','/?room='+encodeURIComponent(id));$('create').disabled=true;$('join').disabled=true;$('roomnote').textContent=index===0?'あなたはPLAYER 1。PLAYER 2の参加を待っています…':'あなたはPLAYER 2。対戦が開始します！';$('status').textContent='部屋 '+id+' に参加しました。あなたは PLAYER '+(index+1)+' です';}
+socket.on('connect',()=>{$('connection').textContent='● 接続済み';$('connection').style.color='#83e2b8';
+  if(room){const previous=room; resetLobby(false);$('code').value=previous;socket.emit('join',{code:previous});}
+  else if(incoming&&!autojoined){autojoined=true;$('code').value=incoming;socket.emit('join',{code:incoming});}
+});
+socket.on('disconnect',()=>{$('connection').textContent='● 切断中';$('connection').style.color='#ff8b9a';$('status').textContent='通信が切れました。再接続を待っています';});
+socket.on('joined',data=>enter(data.code,data.slot));
+socket.on('notice',msg=>{$('status').textContent=msg;
+  if(msg.includes('見つかりません')||msg.includes('満室')||msg.includes('正しくありません'))resetLobby(false);
+  else if(slot===null){$('create').disabled=false;$('join').disabled=false;}
+});
+socket.on('state',s=>{snap=s;$('timer').textContent=s.time;$('hp1').style.width=(s.players[0]?.hp||0)+'%';$('hp2').style.width=(s.players[1]?.hp||0)+'%';const active=s.phase==='playing';running=active;if(active){$('center').textContent='';$('roomnote').textContent='対戦中！ あなたは PLAYER '+(slot+1);$('rematch').classList.add('hidden');}else if(s.phase==='waiting'){$('center').textContent='WAITING FOR OPPONENT';$('center').style.color='#c3dbff';}else if(s.phase==='ended'){$('center').textContent=s.winner===-1?'DRAW':s.winner===0?'PLAYER 1 WINS':'PLAYER 2 WINS';$('center').style.color=s.winner===0?'#7be5ff':'#ffad85';$('rematch').classList.remove('hidden');}for(const evt of s.events){if(evt.kind==='hit'){shaker=evt.guard?3:10;const origin=project([evt.x,2,0]);for(let i=0;i<19;i++){const a=Math.random()*Math.PI*2,v=1+Math.random()*5;sparks.push({x:origin[0],y:origin[1],vx:Math.cos(a)*v*80,vy:Math.sin(a)*v*80,life:.35,col:evt.guard?'#b9eeff':'#ffd68a'});}}}});
+function resetLobby(clearUrl=true){slot=null;room=null;snap=null;running=false;lastInput='';$('create').disabled=false;$('join').disabled=false;$('linkbox').style.display='none';$('rematch').classList.add('hidden');$('center').textContent='ONLINE VERSUS';$('timer').textContent='60';$('hp1').style.width='100%';$('hp2').style.width='100%';if(clearUrl)history.replaceState(null,'',location.pathname);}
+$('leave').onclick=()=>{socket.emit('leave');resetLobby();$('status').textContent='退出しました。「部屋を作る」で新しい対戦を開始できます。';};
+$('create').onclick=()=>socket.emit('create');$('join').onclick=()=>socket.emit('join',{code:$('code').value.toUpperCase()});$('code').onkeydown=e=>{if(e.key==='Enter')$('join').click();};$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('invite').value);$('copy').textContent='コピーしました！';setTimeout(()=>$('copy').textContent='URLをコピー',1400);}catch{$('invite').select();document.execCommand('copy');}};$('rematch').onclick=()=>socket.emit('rematch');
+function project([x,y,z]){const cz=15-z*.53+y*.2,s=600/cz;return [500+x*s,354-(y-1)*s-z*9,s];}
+function face(points,col){const d=points.reduce((a,v)=>a+v[2],0)/points.length;faces.push({points,col,d});}
+function tint(hex,k){return '#'+[1,3,5].map(i=>Math.min(255,Math.max(0,Math.round(parseInt(hex.slice(i,i+2),16)*k))).toString(16).padStart(2,'0')).join('');}
+let faces=[];
+function cube(x,y,z,sx,sy,sz,col){const v=[];for(let zz of [-1,1])for(let yy of [-1,1])for(let xx of [-1,1])v.push([x+xx*sx/2,y+yy*sy/2,z+zz*sz/2]);const indices=[[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]],shades=[.55,.95,.78,1.17,.69,.93];indices.forEach((f,i)=>face(f.map(n=>v[n]),tint(col,shades[i])));}
+function limb(ax,ay,az,bx,by,bz,width,color){const dx=bx-ax,dy=by-ay,len=Math.max(.01,Math.hypot(dx,dy)),nx=-dy/len*width/2,ny=dx/len*width/2;face([[ax+nx,ay+ny,az-.13],[bx+nx,by+ny,bz-.13],[bx-nx,by-ny,bz-.13],[ax-nx,ay-ny,az-.13]],color);face([[ax+nx,ay+ny,az+.13],[bx+nx,by+ny,bz+.13],[bx-nx,by-ny,bz+.13],[ax-nx,ay-ny,az+.13]],tint(color,.65));}
+const palette=[{body:'#318cd4',light:'#8be9ff',dark:'#1b3559',skin:'#efbf9e'},{body:'#c84660',light:'#ffaf7a',dark:'#4c233d',skin:'#e5ad87'}];
+function fighter(p,i){const c=palette[i],x=p.x,y=p.y,z=i?.2:-.2,dir=p.face,a=p.action,walk=a==='walk'?Math.sin(t*12):0,hit=a==='punch'?Math.max(0,Math.sin((.28-p.anim)/.28*Math.PI)):0,kick=a==='kick'?Math.max(0,Math.sin((.45-p.anim)/.45*Math.PI)):0,guard=p.guard?1:0;let lean=a==='hurt'?-dir*.18:0;
+cube(x,y+.35,z,.8,.38,.58,c.dark);limb(x-.24,y+.57,z,x-.27-dir*walk*.22,y+.12+Math.max(0,walk)*.13,z,.29,c.dark);limb(x+.24,y+.57,z,x+.25+dir*walk*.22+dir*kick*1.5,y+.15+kick*.85,z,.3,c.dark);
+cube(x+lean,y+1.28,z,.91,1.2,.54,c.body);cube(x+lean,y+1.93,z,.94,.18,.61,c.light);cube(x+lean,y+2.33,z,.7,.73,.65,c.skin);cube(x+lean+dir*.1,y+2.73,z,.74,.22,.7,c.dark);cube(x+lean+dir*.12,y+2.37,z+.34,.1,.1,.05,'#1b2439');cube(x+lean-dir*.12,y+2.37,z+.34,.1,.1,.05,'#1b2439');
+limb(x+lean-.48,y+1.7,z,x+lean-.58+dir*guard*.2,y+1.09+guard*.9,z+.25,.26,c.body);limb(x+lean+.48,y+1.7,z,x+lean+.59+dir*(hit*1.45+guard*.2),y+1.08+hit*.37+guard*.9,z+.32,.3,c.body);cube(x+lean+.59+dir*(hit*1.45+guard*.2),y+1.08+hit*.37+guard*.9,z+.32,.37,.34,.33,c.light);cube(x+lean-.58+dir*guard*.2,y+1.09+guard*.9,z+.25,.32,.33,.32,c.light);
+}
+function draw(){const w=canvas.width,h=canvas.height;const bg=ctx.createLinearGradient(0,0,0,h);bg.addColorStop(0,'#060d21');bg.addColorStop(.65,'#202e4a');bg.addColorStop(1,'#091827');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);ctx.save();if(shaker){ctx.translate((Math.random()-.5)*shaker,(Math.random()-.5)*shaker);shaker*=.84;if(shaker<.2)shaker=0;}
+ctx.fillStyle='#17253a';ctx.fillRect(0,298,1000,265);ctx.strokeStyle='#36536f';ctx.lineWidth=1;for(let x=-12;x<=12;x++){let a=project([x,0,-7]),b=project([x,0,7]);ctx.beginPath();ctx.moveTo(...a.slice(0,2));ctx.lineTo(...b.slice(0,2));ctx.stroke();}for(let z=-7;z<=7;z++){let a=project([-12,0,z]),b=project([12,0,z]);ctx.beginPath();ctx.moveTo(...a.slice(0,2));ctx.lineTo(...b.slice(0,2));ctx.stroke();}
+for(let j=0;j<10;j++){ctx.fillStyle=j%2?'#243751':'#30445d';ctx.fillRect(j*115-15,279,82,22);ctx.fillStyle='#eda96e';ctx.fillRect(j*115,286,45,3);}ctx.fillStyle='#152136';ctx.fillRect(0,278,1000,12);
+faces=[];if(snap)snap.players.forEach((p,i)=>{if(p){const pos=project([p.x,0,i?.2:-.2]);ctx.fillStyle='#0008';ctx.beginPath();ctx.ellipse(pos[0],pos[1]+10,35,8,0,0,Math.PI*2);ctx.fill();fighter(p,i);}});faces.sort((a,b)=>a.d-b.d);for(const f of faces){ctx.fillStyle=f.col;ctx.strokeStyle='#0b162a';ctx.lineWidth=1.2;ctx.beginPath();f.points.forEach((v,i)=>{const [x,y]=project(v);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});ctx.closePath();ctx.fill();ctx.stroke();}
+for(const p of sparks){ctx.globalAlpha=Math.max(0,p.life/.35);ctx.fillStyle=p.col;ctx.fillRect(p.x,p.y,6,6);}ctx.globalAlpha=1;ctx.restore();if(!snap){ctx.fillStyle='#dce8ff';ctx.font='900 45px system-ui';ctx.textAlign='center';ctx.fillText('ENTER THE ARENA',500,265);ctx.font='16px system-ui';ctx.fillStyle='#9dbfe0';ctx.fillText('CREATE OR JOIN A PRIVATE ROOM',500,296);}}
+let prev=performance.now();function frame(now){const dt=Math.min(.05,(now-prev)/1000);prev=now;t+=dt;for(const p of sparks){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=200*dt;p.life-=dt;}sparks=sparks.filter(p=>p.life>0);draw();requestAnimationFrame(frame);}requestAnimationFrame(frame);
+})();
